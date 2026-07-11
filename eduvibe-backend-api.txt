@@ -1,0 +1,896 @@
+# 🎓 EduVibe Academy - Backend API
+
+## 📁 هيكل المشروع الكامل
+
+```
+eduvibe-api/
+├── package.json
+├── .env.example
+├── server.js
+├── config/
+│   └── db.js
+├── models/
+│   └── User.js
+├── controllers/
+│   └── authController.js
+├── routes/
+│   └── auth.js
+└── middleware/
+    └── auth.js
+```
+
+---
+
+## 1️⃣ `package.json`
+
+```json
+{
+  "name": "eduvibe-api",
+  "version": "1.0.0",
+  "description": "EduVibe Academy Backend API",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0",
+    "express-validator": "^7.2.0",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.7.0",
+    "helmet": "^7.1.0",
+    "morgan": "^1.10.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.7"
+  }
+}
+```
+
+---
+
+## 2️⃣ `.env.example`
+
+```env
+# ========== MongoDB ==========
+MONGODB_URI=mongodb://localhost:27017/eduvibe
+
+# ========== JWT ==========
+JWT_SECRET=your_super_secret_jwt_key_here_change_in_production
+JWT_EXPIRES_IN=7d
+
+# ========== Server ==========
+PORT=5000
+NODE_ENV=development
+
+# ========== Bcrypt ==========
+BCRYPT_SALT_ROUNDS=12
+```
+
+---
+
+## 3️⃣ `server.js` — نقطة الدخول الرئيسية
+
+```javascript
+const express = require("express");
+const mongoose = require("mongoose");
+const cors = require("cors");
+const helmet = require("helmet");
+const morgan = require("morgan");
+require("dotenv").config();
+
+// ========== Import Routes ==========
+const authRoutes = require("./routes/auth");
+
+// ========== Express App ==========
+const app = express();
+
+// ========== Middlewares ==========
+app.use(helmet());                          // أمان الرؤوس
+app.use(cors({
+  origin: process.env.CLIENT_URL || "http://localhost:3000",
+  credentials: true,
+}));
+app.use(morgan("dev"));                     // تسجيل الطلبات
+app.use(express.json());                    // تحليل JSON
+app.use(express.urlencoded({ extended: true }));
+
+// ========== Routes ==========
+app.use("/api/auth", authRoutes);
+
+// ========== Health Check ==========
+app.get("/api/health", (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: "🚀 EduVibe API is running smoothly",
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// ========== 404 Handler ==========
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    message: "🔍 المسار غير موجود - Route not found",
+  });
+});
+
+// ========== Global Error Handler ==========
+app.use((err, req, res, next) => {
+  console.error("❌ Server Error:", err.stack);
+  res.status(err.status || 500).json({
+    success: false,
+    message: err.message || "⚠️ خطأ داخلي في الخادم",
+  });
+});
+
+// ========== Database Connection + Server Start ==========
+const PORT = process.env.PORT || 5000;
+const MONGODB_URI = process.env.MONGODB_URI || "mongodb://localhost:27017/eduvibe";
+
+mongoose
+  .connect(MONGODB_URI)
+  .then(() => {
+    console.log("✅ تم الاتصال بقاعدة البيانات MongoDB بنجاح");
+    app.listen(PORT, () => {
+      console.log(`🚀 EduVibe Server يعمل على المنفذ ${PORT}`);
+      console.log(`📡 API: http://localhost:${PORT}/api`);
+    });
+  })
+  .catch((err) => {
+    console.error("❌ فشل الاتصال بقاعدة البيانات:", err.message);
+    process.exit(1);
+  });
+```
+
+---
+
+## 4️⃣ `config/db.js` — إعدادات الاتصال بقاعدة البيانات
+
+```javascript
+const mongoose = require("mongoose");
+
+const connectDB = async () => {
+  try {
+    const conn = await mongoose.connect(process.env.MONGODB_URI, {
+      // Mongoose 7+ لا يحتاج هذه الخيارات افتراضيًا
+      // لكن نضيفها للتوافق مع الإصدارات الأقدم
+    });
+
+    console.log(`✅ MongoDB Connected: ${conn.connection.host}`);
+
+    // ========== مراقبة أحداث الاتصال ==========
+    mongoose.connection.on("error", (err) => {
+      console.error("❌ MongoDB connection error:", err);
+    });
+
+    mongoose.connection.on("disconnected", () => {
+      console.warn("⚠️ MongoDB disconnected. محاولة إعادة الاتصال...");
+    });
+
+    mongoose.connection.on("reconnected", () => {
+      console.log("✅ MongoDB reconnected successfully");
+    });
+
+  } catch (error) {
+    console.error("❌ فشل الاتصال بـ MongoDB:", error.message);
+    // إعادة المحاولة بعد 5 ثوانٍ
+    console.log("🔄 إعادة المحاولة خلال 5 ثوانٍ...");
+    setTimeout(connectDB, 5000);
+  }
+};
+
+module.exports = connectDB;
+```
+
+---
+
+## 5️⃣ `models/User.js` — نموذج المستخدم (الطالب)
+
+```javascript
+const mongoose = require("mongoose");
+const bcrypt = require("bcryptjs");
+
+// ========== User Schema ==========
+const userSchema = new mongoose.Schema(
+  {
+    fullName: {
+      type: String,
+      required: [true, "الاسم الكامل مطلوب"],
+      trim: true,
+      minlength: [3, "الاسم يجب أن يكون 3 أحرف على الأقل"],
+      maxlength: [50, "الاسم لا يتجاوز 50 حرفًا"],
+    },
+    email: {
+      type: String,
+      required: [true, "البريد الإلكتروني مطلوب"],
+      unique: true,
+      lowercase: true,
+      trim: true,
+      match: [
+        /^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/,
+        "يرجى إدخال بريد إلكتروني صحيح",
+      ],
+    },
+    password: {
+      type: String,
+      required: [true, "كلمة المرور مطلوبة"],
+      minlength: [8, "كلمة المرور يجب أن تكون 8 أحرف على الأقل"],
+      select: false, // لا تُعاد كلمة المرور في الاستعلامات افتراضيًا
+    },
+    phone: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    role: {
+      type: String,
+      enum: ["student", "instructor", "admin"],
+      default: "student",
+    },
+    avatar: {
+      type: String,
+      default: "",
+    },
+    isActive: {
+      type: Boolean,
+      default: true,
+    },
+    enrolledCourses: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Course",
+      },
+    ],
+  },
+  {
+    timestamps: true, // createdAt و updatedAt تلقائيًا
+  }
+);
+
+// ========== تشفير كلمة المرور قبل الحفظ ==========
+userSchema.pre("save", async function (next) {
+  // إذا لم يتم تعديل كلمة المرور، تجاوز التشفير
+  if (!this.isModified("password")) return next();
+
+  try {
+    const saltRounds = parseInt(process.env.BCRYPT_SALT_ROUNDS) || 12;
+    this.password = await bcrypt.hash(this.password, saltRounds);
+    next();
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ========== مقارنة كلمة المرور (للاستخدام في تسجيل الدخول) ==========
+userSchema.methods.comparePassword = async function (candidatePassword) {
+  return await bcrypt.compare(candidatePassword, this.password);
+};
+
+// ========== إخفاء الحقول الحساسة عند التحويل إلى JSON ==========
+userSchema.methods.toJSON = function () {
+  const user = this.toObject();
+  delete user.password;
+  delete user.__v;
+  return user;
+};
+
+// ========== إنشاء Token للمستخدم ==========
+userSchema.methods.generateAuthToken = function () {
+  const jwt = require("jsonwebtoken");
+  return jwt.sign(
+    {
+      id: this._id,
+      email: this.email,
+      role: this.role,
+    },
+    process.env.JWT_SECRET,
+    { expiresIn: process.env.JWT_EXPIRES_IN || "7d" }
+  );
+};
+
+const User = mongoose.model("User", userSchema);
+
+module.exports = User;
+```
+
+---
+
+## 6️⃣ `controllers/authController.js` — منطق المصادقة
+
+```javascript
+const User = require("../models/User");
+const { validationResult } = require("express-validator");
+
+// ==================== SIGN UP ====================
+// POST /api/auth/signup
+const signup = async (req, res, next) => {
+  try {
+    // ========== التحقق من صحة المدخلات ==========
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: "بيانات غير صالحة",
+        errors: errors.array().map((err) => ({
+          field: err.path,
+          message: err.msg,
+        })),
+      });
+    }
+
+    const { fullName, email, password, phone } = req.body;
+
+    // ========== التحقق من عدم وجود المستخدم مسبقًا ==========
+    const existingUser = await User.findOne({ email: email.toLowerCase() });
+    if (existingUser) {
+      return res.status(409).json({
+        success: false,
+        message: "هذا البريد الإلكتروني مسجل مسبقًا",
+        field: "email",
+      });
+    }
+
+    // ========== إنشاء المستخدم الجديد ==========
+    const newUser = await User.create({
+      fullName,
+      email,
+      password,
+      phone: phone || "",
+    });
+
+    // ========== توليد JWT Token ==========
+    const token = newUser.generateAuthToken();
+
+    // ========== إرسال الاستجابة ==========
+    res.status(201).json({
+      success: true,
+      message: "🎉 تم إنشاء الحساب بنجاح! مرحبًا بك في EduVibe",
+      token,
+      user: {
+        id: newUser._id,
+        fullName: newUser.fullName,
+        email: newUser.email,
+        role: newUser.role,
+        phone: newUser.phone,
+        avatar: newUser.avatar,
+        createdAt: newUser.createdAt,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ==================== LOGIN ====================
+// POST /api/auth/login
+const login = async (req, res, next) => {
+  try {
+    // ========== التحقق من صحة المدخلات ==========
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: "بيانات غير صالحة",
+        errors: errors.array().map((err) => ({
+          field: err.path,
+          message: err.msg,
+        })),
+      });
+    }
+
+    const { email, password } = req.body;
+
+    // ========== البحث عن المستخدم + جلب كلمة المرور ==========
+    const user = await User.findOne({ email: email.toLowerCase() }).select(
+      "+password"
+    );
+
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: "البريد الإلكتروني أو كلمة المرور غير صحيحة",
+      });
+    }
+
+    // ========== التحقق من أن الحساب نشط ==========
+    if (!user.isActive) {
+      return res.status(403).json({
+        success: false,
+        message: "هذا الحساب معطّل. يرجى التواصل مع الدعم",
+      });
+    }
+
+    // ========== مقارنة كلمة المرور ==========
+    const isPasswordCorrect = await user.comparePassword(password);
+    if (!isPasswordCorrect) {
+      return res.status(401).json({
+        success: false,
+        message: "البريد الإلكتروني أو كلمة المرور غير صحيحة",
+      });
+    }
+
+    // ========== توليد JWT Token ==========
+    const token = user.generateAuthToken();
+
+    // ========== إرسال الاستجابة ==========
+    res.status(200).json({
+      success: true,
+      message: `👋 مرحبًا بعودتك ${user.fullName}!`,
+      token,
+      user: {
+        id: user._id,
+        fullName: user.fullName,
+        email: user.email,
+        role: user.role,
+        phone: user.phone,
+        avatar: user.avatar,
+        enrolledCourses: user.enrolledCourses,
+        createdAt: user.createdAt,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ==================== GET CURRENT USER ====================
+// GET /api/auth/me
+const getMe = async (req, res, next) => {
+  try {
+    const user = await User.findById(req.user.id).populate("enrolledCourses");
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "المستخدم غير موجود",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      user,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ==================== UPDATE PROFILE ====================
+// PUT /api/auth/me
+const updateProfile = async (req, res, next) => {
+  try {
+    const { fullName, phone, avatar } = req.body;
+
+    const updatedUser = await User.findByIdAndUpdate(
+      req.user.id,
+      {
+        ...(fullName && { fullName }),
+        ...(phone !== undefined && { phone }),
+        ...(avatar !== undefined && { avatar }),
+      },
+      { new: true, runValidators: true }
+    );
+
+    res.status(200).json({
+      success: true,
+      message: "✅ تم تحديث الملف الشخصي بنجاح",
+      user: updatedUser,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+module.exports = {
+  signup,
+  login,
+  getMe,
+  updateProfile,
+};
+```
+
+---
+
+## 7️⃣ `routes/auth.js` — مسارات المصادقة
+
+```javascript
+const express = require("express");
+const router = express.Router();
+const { body } = require("express-validator");
+
+const {
+  signup,
+  login,
+  getMe,
+  updateProfile,
+} = require("../controllers/authController");
+const { protect } = require("../middleware/auth");
+
+// ========== قواعد التحقق من صحة المدخلات ==========
+const signupValidation = [
+  body("fullName")
+    .trim()
+    .notEmpty()
+    .withMessage("الاسم الكامل مطلوب")
+    .isLength({ min: 3, max: 50 })
+    .withMessage("الاسم يجب أن يكون بين 3 و 50 حرفًا"),
+
+  body("email")
+    .trim()
+    .notEmpty()
+    .withMessage("البريد الإلكتروني مطلوب")
+    .isEmail()
+    .withMessage("يرجى إدخال بريد إلكتروني صحيح")
+    .normalizeEmail(),
+
+  body("password")
+    .notEmpty()
+    .withMessage("كلمة المرور مطلوبة")
+    .isLength({ min: 8 })
+    .withMessage("كلمة المرور يجب أن تكون 8 أحرف على الأقل")
+    .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/)
+    .withMessage("كلمة المرور يجب أن تحتوي على حرف كبير، حرف صغير، ورقم"),
+
+  body("phone")
+    .optional({ values: "falsy" })
+    .trim()
+    .matches(/^[+]?[\d\s()-]{7,15}$/)
+    .withMessage("رقم الهاتف غير صالح"),
+];
+
+const loginValidation = [
+  body("email")
+    .trim()
+    .notEmpty()
+    .withMessage("البريد الإلكتروني مطلوب")
+    .isEmail()
+    .withMessage("يرجى إدخال بريد إلكتروني صحيح")
+    .normalizeEmail(),
+
+  body("password")
+    .notEmpty()
+    .withMessage("كلمة المرور مطلوبة"),
+];
+
+// ==================== ROUTES ====================
+
+// POST /api/auth/signup  -  تسجيل حساب جديد
+router.post("/signup", signupValidation, signup);
+
+// POST /api/auth/login  -  تسجيل الدخول
+router.post("/login", loginValidation, login);
+
+// GET /api/auth/me  -  جلب بيانات المستخدم الحالي (محمي)
+router.get("/me", protect, getMe);
+
+// PUT /api/auth/me  -  تحديث الملف الشخصي (محمي)
+router.put("/me", protect, updateProfile);
+
+module.exports = router;
+```
+
+---
+
+## 8️⃣ `middleware/auth.js` — وسيط توثيق JWT
+
+```javascript
+const jwt = require("jsonwebtoken");
+const User = require("../models/User");
+
+/**
+ * Middleware لحماية المسارات - يتحقق من وجود JWT Token صالح
+ */
+const protect = async (req, res, next) => {
+  try {
+    let token;
+
+    // ========== استخراج Token من الرأس Authorization ==========
+    if (
+      req.headers.authorization &&
+      req.headers.authorization.startsWith("Bearer")
+    ) {
+      token = req.headers.authorization.split(" ")[1];
+    }
+
+    // ========== التحقق من وجود Token ==========
+    if (!token) {
+      return res.status(401).json({
+        success: false,
+        message: "🔒 غير مصرح - يرجى تسجيل الدخول أولاً",
+      });
+    }
+
+    // ========== فك تشفير والتحقق من Token ==========
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    // ========== التحقق من أن المستخدم ما زال موجودًا ==========
+    const currentUser = await User.findById(decoded.id);
+    if (!currentUser) {
+      return res.status(401).json({
+        success: false,
+        message: "المستخدم المرتبط بهذا التوكن لم يعد موجودًا",
+      });
+    }
+
+    // ========== التحقق من أن الحساب نشط ==========
+    if (!currentUser.isActive) {
+      return res.status(403).json({
+        success: false,
+        message: "هذا الحساب معطّل",
+      });
+    }
+
+    // ========== إرفاق المستخدم في كائن الطلب ==========
+    req.user = currentUser;
+    next();
+  } catch (error) {
+    if (error.name === "JsonWebTokenError") {
+      return res.status(401).json({
+        success: false,
+        message: "توكن غير صالح",
+      });
+    }
+    if (error.name === "TokenExpiredError") {
+      return res.status(401).json({
+        success: false,
+        message: "انتهت صلاحية التوكن، يرجى تسجيل الدخول مجددًا",
+      });
+    }
+    next(error);
+  }
+};
+
+/**
+ * Middleware للتحقق من صلاحيات الأدوار
+ * @param  {...string} roles - الأدوار المسموح لها بالوصول
+ * مثال: authorize('admin', 'instructor')
+ */
+const authorize = (...roles) => {
+  return (req, res, next) => {
+    if (!roles.includes(req.user.role)) {
+      return res.status(403).json({
+        success: false,
+        message: "⛔ ليس لديك صلاحية للوصول إلى هذا المورد",
+      });
+    }
+    next();
+  };
+};
+
+module.exports = { protect, authorize };
+```
+
+---
+
+## 🧪 اختبار API
+
+بعد تشغيل الخادم، يمكنك اختبار الـ API باستخدام الأدوات التالية:
+
+### 📌 تسجيل حساب جديد (Sign Up)
+
+```http
+POST http://localhost:5000/api/auth/signup
+Content-Type: application/json
+
+{
+  "fullName": "أحمد محمد",
+  "email": "ahmed@example.com",
+  "password": "EduVibe2024!",
+  "phone": "+966501234567"
+}
+```
+
+**الاستجابة الناجحة (201):**
+```json
+{
+  "success": true,
+  "message": "🎉 تم إنشاء الحساب بنجاح! مرحبًا بك في EduVibe",
+  "token": "eyJhbGciOiJIUzI1NiIs...",
+  "user": {
+    "id": "670ab12c3f...",
+    "fullName": "أحمد محمد",
+    "email": "ahmed@example.com",
+    "role": "student",
+    "phone": "+966501234567",
+    "avatar": "",
+    "createdAt": "2025-01-15T10:30:00.000Z"
+  }
+}
+```
+
+---
+
+### 📌 تسجيل الدخول (Login)
+
+```http
+POST http://localhost:5000/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "ahmed@example.com",
+  "password": "EduVibe2024!"
+}
+```
+
+**الاستجابة الناجحة (200):**
+```json
+{
+  "success": true,
+  "message": "👋 مرحبًا بعودتك أحمد محمد!",
+  "token": "eyJhbGciOiJIUzI1NiIs...",
+  "user": {
+    "id": "670ab12c3f...",
+    "fullName": "أحمد محمد",
+    "email": "ahmed@example.com",
+    "role": "student",
+    "phone": "+966501234567",
+    "avatar": "",
+    "createdAt": "2025-01-15T10:30:00.000Z"
+  }
+}
+```
+
+---
+
+### 📌 جلب الملف الشخصي (محمي)
+
+```http
+GET http://localhost:5000/api/auth/me
+Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
+```
+
+---
+
+### 📌 تحديث الملف الشخصي (محمي)
+
+```http
+PUT http://localhost:5000/api/auth/me
+Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
+Content-Type: application/json
+
+{
+  "fullName": "أحمد محمد العتيبي",
+  "phone": "+966551234567"
+}
+```
+
+---
+
+## 🔗 ربط صفحة الهبوط (Frontend)
+
+مثال لكود JavaScript في صفحة الهبوط للاتصال بالـ API:
+
+```javascript
+// ========== API Base URL ==========
+const API_URL = "http://localhost:5000/api";
+
+// ========== دالة تسجيل حساب جديد ==========
+async function signupUser(fullName, email, password, phone) {
+  try {
+    const response = await fetch(`${API_URL}/auth/signup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fullName, email, password, phone }),
+    });
+
+    const data = await response.json();
+
+    if (data.success) {
+      // حفظ التوكن في localStorage
+      localStorage.setItem("eduvibe_token", data.token);
+      localStorage.setItem("eduvibe_user", JSON.stringify(data.user));
+
+      // توجيه المستخدم إلى لوحة التحكم
+      window.location.href = "/dashboard.html";
+    } else {
+      // عرض رسالة الخطأ
+      alert(data.message);
+    }
+  } catch (error) {
+    console.error("❌ خطأ في الاتصال:", error);
+    alert("حدث خطأ في الاتصال بالخادم");
+  }
+}
+
+// ========== دالة تسجيل الدخول ==========
+async function loginUser(email, password) {
+  try {
+    const response = await fetch(`${API_URL}/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    });
+
+    const data = await response.json();
+
+    if (data.success) {
+      localStorage.setItem("eduvibe_token", data.token);
+      localStorage.setItem("eduvibe_user", JSON.stringify(data.user));
+      window.location.href = "/dashboard.html";
+    } else {
+      alert(data.message);
+    }
+  } catch (error) {
+    console.error("❌ خطأ في الاتصال:", error);
+    alert("حدث خطأ في الاتصال بالخادم");
+  }
+}
+
+// ========== دالة جلب الملف الشخصي ==========
+async function fetchProfile() {
+  const token = localStorage.getItem("eduvibe_token");
+  if (!token) {
+    window.location.href = "/login.html";
+    return;
+  }
+
+  try {
+    const response = await fetch(`${API_URL}/auth/me`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await response.json();
+
+    if (data.success) {
+      // عرض بيانات المستخدم في الصفحة
+      document.getElementById("userName").textContent = data.user.fullName;
+      document.getElementById("userEmail").textContent = data.user.email;
+    }
+  } catch (error) {
+    console.error("❌ خطأ:", error);
+  }
+}
+
+// ========== مثال: ربط نموذج التسجيل ==========
+document.getElementById("signupForm")?.addEventListener("submit", (e) => {
+  e.preventDefault();
+  const fullName = document.getElementById("fullName").value;
+  const email = document.getElementById("email").value;
+  const password = document.getElementById("password").value;
+  const phone = document.getElementById("phone").value;
+  signupUser(fullName, email, password, phone);
+});
+```
+
+---
+
+## 🚀 تعليمات التشغيل
+
+```bash
+# 1. انتقل إلى مجلد المشروع
+cd eduvibe-api
+
+# 2. ثبت الحزم
+npm install
+
+# 3. انسخ ملف البيئة وعدّل القيم
+cp .env.example .env
+
+# 4. شغّل MongoDB محليًا أو استخدم MongoDB Atlas
+
+# 5. شغّل الخادم (وضع التطوير)
+npm run dev
+
+# أو وضع الإنتاج
+npm start
+```
+
+---
+
+### 🛡️ تمّت تغطية:
+
+| الميزة | الحالة |
+|---|---|
+| تسجيل حساب جديد (Sign Up) | ✅ |
+| تسجيل دخول (Login) | ✅ |
+| تشفير كلمة المرور (bcrypt) | ✅ |
+| توثيق الجلسة (JWT) | ✅ |
+| حماية المسارات (Middleware) | ✅ |
+| التحقق من صحة المدخلات | ✅ |
+| معالجة الأخطاء | ✅ |
+| نموذج مستخدم كامل | ✅ |
+| تحديث الملف الشخصي | ✅ |
+| جلب بيانات المستخدم الحالي | ✅ |
