@@ -1,7 +1,7 @@
-{
+ {
   "name": "eduvibe-backend",
   "version": "1.0.0",
-  "description": "Backend API for EduVibe Academy",
+  "description": "",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
