@@ -26,7 +26,7 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-app.options('*', cors(corsOptions)); // التعامل الصريح مع preflight requests
+  // التعامل الصريح مع preflight requests
 
 app.use(express.json());
 
