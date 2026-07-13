@@ -7,7 +7,7 @@ const app = express();
 
 // ============ إعداد CORS ============
 const allowedOrigins = [
-  'https://github.io' // الدومين بتاع GitHub Pages بتاعك (من غير مسار بعده)
+  'https://mosfa-cod.github.io' // الدومين بتاع GitHub Pages بتاعك (من غير مسار بعده)
 ];
 
 const corsOptions = {
